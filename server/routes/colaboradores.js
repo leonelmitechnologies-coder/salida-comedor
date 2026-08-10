@@ -1,41 +1,41 @@
 const { Router } = require('express');
-const db = require('../db');
+const { pool } = require('../db');
 const router = Router();
 
-router.get('/', (_req, res) => {
-  const rows = db.prepare('SELECT * FROM colaboradores ORDER BY nombre').all();
-  res.json(rows);
-});
+const DEPTOS = ['Incoming','Sorting','FFT Lineas','FFT Paletizado','Shipping'];
 
-router.post('/', (req, res) => {
-  const { nombre, num_empleado, departamento, nfc_uid } = req.body;
-  if (!nombre || !num_empleado || !departamento || !nfc_uid) {
-    return res.status(400).json({ error: 'Todos los campos son requeridos' });
-  }
-  const deptos = ['Incoming','Sorting','FFT Lineas','FFT Paletizado','Shipping'];
-  if (!deptos.includes(departamento)) {
-    return res.status(400).json({ error: 'Departamento inválido' });
-  }
+router.get('/', async (_req, res, next) => {
   try {
-    const result = db.prepare(
-      'INSERT INTO colaboradores (nombre, num_empleado, departamento, nfc_uid) VALUES (?, ?, ?, ?)'
-    ).run(nombre.trim(), num_empleado.trim(), departamento, nfc_uid.trim());
-    const nuevo = db.prepare('SELECT * FROM colaboradores WHERE id = ?').get(result.lastInsertRowid);
-    res.status(201).json(nuevo);
+    const { rows } = await pool.query('SELECT * FROM colaboradores ORDER BY nombre');
+    res.json(rows);
+  } catch (e) { next(e); }
+});
+
+router.post('/', async (req, res, next) => {
+  const { nombre, num_empleado, departamento, nfc_uid } = req.body;
+  if (!nombre || !num_empleado || !departamento || !nfc_uid)
+    return res.status(400).json({ error: 'Todos los campos son requeridos' });
+  if (!DEPTOS.includes(departamento))
+    return res.status(400).json({ error: 'Departamento inválido' });
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO colaboradores (nombre, num_empleado, departamento, nfc_uid)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [nombre.trim(), num_empleado.trim(), departamento, nfc_uid.trim()]
+    );
+    res.status(201).json(rows[0]);
   } catch (e) {
-    if (e.message.includes('UNIQUE')) {
-      return res.status(409).json({ error: 'El tag NFC ya está registrado a otro colaborador' });
-    }
-    throw e;
+    if (e.code === '23505') return res.status(409).json({ error: 'El tag NFC ya está registrado a otro colaborador' });
+    next(e);
   }
 });
 
-router.delete('/:id', (req, res) => {
-  const { id } = req.params;
-  const col = db.prepare('SELECT id FROM colaboradores WHERE id = ?').get(id);
-  if (!col) return res.status(404).json({ error: 'Colaborador no encontrado' });
-  db.prepare('DELETE FROM colaboradores WHERE id = ?').run(id);
-  res.json({ ok: true });
+router.delete('/:id', async (req, res, next) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM colaboradores WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: 'Colaborador no encontrado' });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
 });
 
 module.exports = router;

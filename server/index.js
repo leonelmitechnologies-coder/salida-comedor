@@ -1,7 +1,8 @@
 require('dotenv').config();
 const express = require('express');
-const cors = require('cors');
-const path = require('path');
+const cors    = require('cors');
+const path    = require('path');
+const { initDB } = require('./db');
 
 const app = express();
 app.use(cors());
@@ -21,5 +22,13 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'Error interno del servidor' });
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Servidor corriendo en http://localhost:${PORT}`));
+initDB()
+  .then(() => {
+    if (require.main === module) {
+      const PORT = process.env.PORT || 3000;
+      app.listen(PORT, () => console.log(`Servidor en http://localhost:${PORT}`));
+    }
+  })
+  .catch(err => { console.error('Error iniciando DB:', err); process.exit(1); });
+
+module.exports = app;
