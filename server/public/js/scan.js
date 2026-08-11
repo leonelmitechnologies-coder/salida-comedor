@@ -1,22 +1,32 @@
 const Scan = (() => {
-  let nfcReader = null;
+  let abortController = null;
+  let timeoutId       = null;
+  let isScanning      = false;
+  const NFC_AVAILABLE = 'NDEFReader' in window;
 
-  const SVG_SIGNAL = `
-    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round">
-      <circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/>
-      <path d="M8 12a4 4 0 0 1 8 0"/>
-      <path d="M4.5 12a7.5 7.5 0 0 1 15 0"/>
+  const SVG_NFC = `
+    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="2" y="5" width="14" height="14" rx="2"/>
+      <path d="M19 8a5 5 0 0 1 0 8"/>
+      <path d="M22 5a9 9 0 0 1 0 14"/>
+      <path d="M9 9v6l3-2"/>
+    </svg>`;
+
+  const SVG_SPIN = `
+    <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+      <circle cx="12" cy="12" r="9" stroke-dasharray="30 56" stroke-dashoffset="0"/>
     </svg>`;
 
   function render() {
     document.getElementById('view').innerHTML = `
       <div id="scan-view">
         <div id="scan-zone">
-          <div id="scan-ring" class="scan-ring">
-            <div class="scan-inner" id="scan-icon-wrap">${SVG_SIGNAL}</div>
-          </div>
-          <p id="scan-label" class="scan-label">Acercar tarjeta NFC</p>
-          <p id="scan-sub"   class="scan-sub">Chrome en Android con NFC activo</p>
+          <button id="scan-btn" class="scan-ring ${NFC_AVAILABLE ? 'scan-idle' : 'scan-disabled'}" ${NFC_AVAILABLE ? '' : 'disabled'}>
+            <div class="scan-inner" id="scan-icon-wrap">${SVG_NFC}</div>
+          </button>
+          <p id="scan-label" class="scan-label">${NFC_AVAILABLE ? 'Tocar para escanear' : 'NFC no disponible'}</p>
+          <p id="scan-sub"   class="scan-sub">${NFC_AVAILABLE ? 'Presiona y acerca la tarjeta NFC' : 'Usa Chrome en Android con NFC activo'}</p>
+          <button id="scan-cancel" class="scan-cancel hidden">Cancelar</button>
         </div>
 
         <div id="scan-result" class="scan-result hidden"></div>
@@ -28,27 +38,91 @@ const Scan = (() => {
       </div>
     `;
     _injectStyles();
-    _startNFC();
+
+    document.getElementById('scan-btn').addEventListener('click', _onTap);
+    document.getElementById('scan-cancel').addEventListener('click', _cancelScan);
+
     _loadUltimos();
   }
 
-  async function _startNFC() {
-    if (!('NDEFReader' in window)) {
-      _setStatus('NFC no disponible', 'Usa Chrome en Android con NFC activo', true);
-      return;
-    }
+  async function _onTap() {
+    if (isScanning) return;
+    isScanning = true;
+    _setReady();
+
     try {
-      nfcReader = new NDEFReader();
-      await nfcReader.scan();
-      nfcReader.onreading      = (e) => _processScan(e.serialNumber || _extractUID(e.message));
-      nfcReader.onreadingerror = ()  => App.toast('Error al leer la tarjeta', 'error');
+      abortController = new AbortController();
+      const reader = new NDEFReader();
+      await reader.scan({ signal: abortController.signal });
+
+      reader.onreading = (e) => {
+        const uid = e.serialNumber || _extractUID(e.message);
+        _stopScan();
+        _processScan(uid);
+      };
+
+      reader.onreadingerror = () => {
+        App.toast('Error al leer la tarjeta', 'error');
+        _stopScan();
+        _setIdle();
+      };
+
+      // Auto-cancel after 30 s
+      timeoutId = setTimeout(() => {
+        _stopScan();
+        _setIdle();
+        App.toast('Tiempo agotado. Toca de nuevo para escanear.', 'info');
+      }, 30000);
+
     } catch (e) {
-      _setStatus(
-        e.name === 'NotAllowedError' ? 'Permiso denegado' : 'NFC no disponible',
-        e.name === 'NotAllowedError' ? 'Permite el acceso NFC en el navegador' : e.message,
-        true
+      isScanning = false;
+      if (e.name === 'AbortError') { _setIdle(); return; }
+      App.toast(
+        e.name === 'NotAllowedError' ? 'Permite el acceso NFC en el navegador' : 'Error al iniciar NFC',
+        'error'
       );
+      _setIdle();
     }
+  }
+
+  function _cancelScan() {
+    _stopScan();
+    _setIdle();
+  }
+
+  function _stopScan() {
+    clearTimeout(timeoutId);
+    timeoutId = null;
+    if (abortController) { abortController.abort(); abortController = null; }
+    isScanning = false;
+  }
+
+  function _setIdle() {
+    const btn    = document.getElementById('scan-btn');
+    const label  = document.getElementById('scan-label');
+    const sub    = document.getElementById('scan-sub');
+    const cancel = document.getElementById('scan-cancel');
+    const icon   = document.getElementById('scan-icon-wrap');
+    if (!btn) return;
+    btn.className    = 'scan-ring scan-idle';
+    if (icon)   icon.innerHTML = SVG_NFC;
+    if (label)  label.textContent = 'Tocar para escanear';
+    if (sub)    sub.textContent   = 'Presiona y acerca la tarjeta NFC';
+    if (cancel) cancel.classList.add('hidden');
+  }
+
+  function _setReady() {
+    const btn    = document.getElementById('scan-btn');
+    const label  = document.getElementById('scan-label');
+    const sub    = document.getElementById('scan-sub');
+    const cancel = document.getElementById('scan-cancel');
+    const icon   = document.getElementById('scan-icon-wrap');
+    if (!btn) return;
+    btn.className    = 'scan-ring scan-active';
+    if (icon)   icon.innerHTML = SVG_SPIN;
+    if (label)  label.textContent = 'Acercar tarjeta NFC';
+    if (sub)    sub.textContent   = 'Escaneo activo — toca para cancelar';
+    if (cancel) cancel.classList.remove('hidden');
   }
 
   function _extractUID(msg) {
@@ -61,9 +135,9 @@ const Scan = (() => {
   }
 
   async function _processScan(uid) {
-    if (!uid) return;
-    const ring = document.getElementById('scan-ring');
-    ring?.classList.add('pulse');
+    if (!uid) { _setIdle(); return; }
+    const btn = document.getElementById('scan-btn');
+    btn?.classList.add('pulse');
     try {
       const data = await App.apiJSON('/api/scan', { method: 'POST', body: { nfc_uid: uid } });
       _showResult(data);
@@ -71,7 +145,7 @@ const Scan = (() => {
     } catch (e) {
       App.toast(e.message, 'error');
     } finally {
-      setTimeout(() => ring?.classList.remove('pulse'), 600);
+      setTimeout(() => { btn?.classList.remove('pulse'); _setIdle(); }, 600);
     }
   }
 
@@ -147,15 +221,6 @@ const Scan = (() => {
     }
   }
 
-  function _setStatus(label, sub, warn) {
-    document.getElementById('scan-label').textContent = label;
-    document.getElementById('scan-sub').textContent   = sub;
-    if (warn) {
-      const ring = document.getElementById('scan-ring');
-      if (ring) ring.style.borderColor = 'var(--border2)';
-    }
-  }
-
   function _injectStyles() {
     if (document.getElementById('scan-styles')) return;
     const s = document.createElement('style');
@@ -176,18 +241,39 @@ const Scan = (() => {
         border:1.5px solid var(--border2);
         display:flex; align-items:center; justify-content:center;
         position:relative;
-        transition:border-color 0.3s;
+        cursor:pointer;
+        background:transparent;
+        transition:border-color 0.25s, transform 0.15s;
+        -webkit-tap-highlight-color: transparent;
       }
       .scan-ring::before {
         content:'';
         position:absolute; inset:-10px;
         border-radius:50%;
         border:1px solid var(--border);
+        transition: border-color 0.25s;
       }
-      .scan-ring.pulse { border-color: var(--accent); animation: ring-pulse 0.5s ease; }
+      .scan-idle { border-color:var(--border2); }
+      .scan-idle:active { transform:scale(0.95); }
+
+      .scan-active {
+        border-color:var(--accent);
+        animation: ring-rotate 2s linear infinite;
+      }
+      .scan-active::before { border-color:var(--accent-md); opacity:0.3; }
+      @keyframes ring-rotate {
+        0%   { box-shadow: 0 0 0 0   rgba(13,47,90,0.15); }
+        50%  { box-shadow: 0 0 0 12px rgba(13,47,90,0.06); }
+        100% { box-shadow: 0 0 0 0   rgba(13,47,90,0); }
+      }
+
+      .scan-disabled { border-color:var(--border); cursor:not-allowed; opacity:0.5; }
+      .scan-disabled::before { border-color:var(--border); }
+
+      .scan-ring.pulse { animation: ring-pulse 0.5s ease forwards; }
       @keyframes ring-pulse {
-        0%   { box-shadow: 0 0 0 0   rgba(13,47,90,0.2); }
-        100% { box-shadow: 0 0 0 18px rgba(13,47,90,0); }
+        0%   { box-shadow: 0 0 0 0   rgba(13,47,90,0.25); }
+        100% { box-shadow: 0 0 0 22px rgba(13,47,90,0); }
       }
 
       .scan-inner {
@@ -197,10 +283,25 @@ const Scan = (() => {
         border:1px solid var(--border);
         display:flex; align-items:center; justify-content:center;
         color: var(--accent);
+        pointer-events:none;
       }
+      .scan-active .scan-inner svg { animation: icon-spin 1.5s linear infinite; }
+      @keyframes icon-spin { to { stroke-dashoffset: 86; } }
 
       .scan-label { font-size:16px; font-weight:600; color:var(--text); }
       .scan-sub   { font-size:12px; color:var(--text-muted); text-align:center; }
+
+      .scan-cancel {
+        margin-top:4px;
+        padding:6px 20px;
+        border:1px solid var(--border2);
+        border-radius:20px;
+        background:transparent;
+        font-size:13px;
+        color:var(--text-muted);
+        cursor:pointer;
+      }
+      .scan-cancel.hidden { display:none; }
 
       .scan-result {
         margin:0 16px 16px;
