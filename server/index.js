@@ -14,8 +14,8 @@ app.use('/api/scan',          require('./routes/scan'));
 app.use('/api/registros',     require('./routes/registros'));
 app.use('/api/export',        require('./routes/export'));
 
-app.use(express.static(path.join(__dirname, '../public')));
-app.get('*', (_req, res) => res.sendFile(path.join(__dirname, '../public/index.html')));
+app.use(express.static(path.join(__dirname, 'public')));
+app.get('*', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 
 app.use((err, _req, res, _next) => {
   console.error(err);
