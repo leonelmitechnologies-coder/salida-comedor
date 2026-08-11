@@ -1,0 +1,9 @@
+{
+  "name": "salida-comedor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "npm install --prefix server",
+    "start": "node server/index.js"
+  }
+}
